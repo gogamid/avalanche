@@ -100,11 +100,6 @@ class GenerativeReplayPlugin(SupervisedPlugin):
             self.old_model = deepcopy(strategy.model)
             self.old_model.eval()
 
-    def after_forward(self, strategy, **kwargs):
-        if self.untrained_solver:
-            return
-        l = 2 + 3
-
     def after_training_exp(
         self, strategy, num_workers: int = 0, shuffle: bool = True, **kwargs
     ):
@@ -171,6 +166,7 @@ class TrainGeneratorAfterExpPlugin(SupervisedPlugin):
         """
         for plugin in strategy.plugins:
             if type(plugin) is GenerativeReplayPlugin:
+                print("Training generator after experience")
                 plugin.generator_strategy.train(strategy.experience)
 
 

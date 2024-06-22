@@ -531,6 +531,27 @@ class GenerativeReplay(SupervisedTemplate):
             **base_kwargs
         )
 
+    def criterion(self):
+        """Weighted Loss function according to the importance of new task."""
+        replay_idx = self.train_mb_size
+
+        data_loss = self._criterion(
+            self.mb_output[:replay_idx],
+            self.mb_y[:replay_idx],
+        )
+
+        if self.experience.current_experience == 0:
+            return data_loss
+
+        replay_loss = self._criterion(
+            self.mb_output[replay_idx:],
+            self.mb_y[replay_idx:],
+        )
+
+        ratio = 1 / len(self.experience.classes_seen_so_far)
+
+        return ratio * data_loss + (1 - ratio) * replay_loss
+
 
 class AETraining(SupervisedTemplate):
     """AETraining class
@@ -676,9 +697,34 @@ class VAETraining(SupervisedTemplate):
         )
 
     def criterion(self):
-        """Adapt input to criterion as needed to compute reconstruction loss
-        and KL divergence. See default criterion VAELoss."""
-        return self._criterion(self.mb_x, self.mb_output)
+        """Weighted Loss function according to the importance of new task."""
+
+        replay_idx = self.train_mb_size
+        self.x_hat, self.mean, self.logvar = self.mb_output
+        data_loss = self._criterion(
+            self.mb_x[:replay_idx],
+            (
+                self.x_hat[:replay_idx],
+                self.mean[:replay_idx],
+                self.logvar[:replay_idx],
+            ),
+        )
+
+        if self.experience.current_experience == 0:
+            return data_loss
+
+        replay_loss = self._criterion(
+            self.mb_x[replay_idx:],
+            (
+                self.x_hat[replay_idx:],
+                self.mean[replay_idx:],
+                self.logvar[replay_idx:],
+            ),
+        )
+
+        ratio = 1 / len(self.experience.classes_seen_so_far)
+
+        return ratio * data_loss + (1 - ratio) * replay_loss
 
 
 class GSS_greedy(SupervisedTemplate):
