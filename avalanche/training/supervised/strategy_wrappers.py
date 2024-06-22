@@ -473,6 +473,7 @@ class GenerativeReplay(SupervisedTemplate):
             :class:`~avalanche.training.BaseTemplate` constructor arguments.
         """
 
+        self.weighted_replay = weighted_replay
         if generator_strategy is not None:
             self.generator_strategy = generator_strategy
         else:
@@ -536,16 +537,16 @@ class GenerativeReplay(SupervisedTemplate):
         """Weighted Loss function according to the importance of new task.
         Return normal data loss if weighted_replay is not set.
         """
+
+        if not self.weighted_replay or self.experience.current_experience == 0:
+            return self._criterion(self.mb_output, self.mb_y)
+
         replay_idx = self.train_mb_size
 
         data_loss = self._criterion(
             self.mb_output[:replay_idx],
             self.mb_y[:replay_idx],
         )
-
-        if not self.weighted_replay or self.experience.current_experience == 0:
-            return data_loss
-
         replay_loss = self._criterion(
             self.mb_output[replay_idx:],
             self.mb_y[replay_idx:],
@@ -689,7 +690,6 @@ class VAETraining(SupervisedTemplate):
         :param **base_kwargs: any additional
             :class:`~avalanche.training.BaseTemplate` constructor arguments.
         """
-
         super().__init__(
             model=model,
             optimizer=optimizer,
@@ -703,13 +703,16 @@ class VAETraining(SupervisedTemplate):
             eval_every=eval_every,
             **base_kwargs
         )
+        self.weighted_replay = weighted_replay
 
     def criterion(self):
         """Weighted Loss function according to the importance of new task.
         Return normal data loss if weighted_replay is not set.
         """
+        if not self.weighted_replay or self.experience.current_experience == 0:
+            return self._criterion(self.mb_x, self.mb_output)
+
         replay_idx = self.train_mb_size
-        self.x_hat, self.mean, self.logvar = self.mb_output
         data_loss = self._criterion(
             self.mb_x[:replay_idx],
             (
@@ -718,9 +721,6 @@ class VAETraining(SupervisedTemplate):
                 self.logvar[:replay_idx],
             ),
         )
-
-        if not self.weighted_replay or self.experience.current_experience == 0:
-            return data_loss
 
         replay_loss = self._criterion(
             self.mb_x[replay_idx:],
