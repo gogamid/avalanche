@@ -14,7 +14,7 @@ from torch.nn.parameter import Parameter
 
 from torch import sigmoid
 from torch.nn import Module, CrossEntropyLoss
-from torch.optim import Optimizer
+from torch.optim import Optimizer, Adam
 from avalanche.models.packnet import PackNetModel, PackNetModule, PackNetPlugin
 
 from avalanche.models.pnn import PNN
@@ -401,7 +401,7 @@ class Replay(SupervisedTemplate):
 
 
 class GenerativeReplay(SupervisedTemplate):
-    """Generative Replay Strategy
+    """Generative Replay (GR) strategy
 
     This implements Deep Generative Replay for a Scholar consisting of a Solver
     and Generator as described in https://arxiv.org/abs/1705.08690.
@@ -437,6 +437,7 @@ class GenerativeReplay(SupervisedTemplate):
         generator_strategy: Optional[BaseTemplate] = None,
         replay_size: Optional[int] = None,
         increasing_replay_size: bool = False,
+        weighted_replay: bool = False,
         **base_kwargs
     ):
         """
@@ -460,24 +461,23 @@ class GenerativeReplay(SupervisedTemplate):
             learning experience.
         :param generator_strategy: A trainable strategy with a generative model,
             which employs GenerativeReplayPlugin. Defaults to None.
+        :param replay_size: The user can specify constant replay size to be
+            generated and added to each minibatch before each iteration.
+        :param increasing_replay_size: If True, in each iteration train_mb_size
+            times current experience index will be added to each minibatch
+            before each iteration.
+        :param weighted_replay: If True, the loss is computed as a weighted sum
+            of the data loss and the replay loss with changing ratio. This
+            assumes replay_size to be None and increasing_replay_size to be False.
         :param **base_kwargs: any additional
             :class:`~avalanche.training.BaseTemplate` constructor arguments.
         """
 
-        # Check if user inputs a generator model
-        # (which is wrapped in a strategy that can be trained and
-        # uses the GenerativeReplayPlugin;
-        # see 'VAETraining" as an example below.)
         if generator_strategy is not None:
             self.generator_strategy = generator_strategy
         else:
-            # By default we use a fully-connected VAE as the generator.
-            # model:
             generator = MlpVAE((1, 28, 28), nhid=2, device=device)
-            # optimzer:
             lr = 0.01
-            from torch.optim import Adam
-
             to_optimize: List[Parameter] = list(
                 filter(lambda p: p.requires_grad, generator.parameters())
             )
@@ -486,7 +486,7 @@ class GenerativeReplay(SupervisedTemplate):
                 lr=lr,
                 weight_decay=0.0001,
             )
-            # strategy (with plugin):
+
             self.generator_strategy = VAETraining(
                 model=generator,
                 optimizer=optimizer_generator,
@@ -495,6 +495,7 @@ class GenerativeReplay(SupervisedTemplate):
                 train_epochs=train_epochs,
                 eval_mb_size=eval_mb_size,
                 device=device,
+                weighted_replay=weighted_replay,
                 plugins=[
                     GenerativeReplayPlugin(
                         replay_size=replay_size,
@@ -532,7 +533,9 @@ class GenerativeReplay(SupervisedTemplate):
         )
 
     def criterion(self):
-        """Weighted Loss function according to the importance of new task."""
+        """Weighted Loss function according to the importance of new task.
+        Return normal data loss if weighted_replay is not set.
+        """
         replay_idx = self.train_mb_size
 
         data_loss = self._criterion(
@@ -540,7 +543,7 @@ class GenerativeReplay(SupervisedTemplate):
             self.mb_y[:replay_idx],
         )
 
-        if self.experience.current_experience == 0:
+        if not self.weighted_replay or self.experience.current_experience == 0:
             return data_loss
 
         replay_loss = self._criterion(
@@ -658,6 +661,7 @@ class VAETraining(SupervisedTemplate):
             EvaluationPlugin, Callable[[], EvaluationPlugin]
         ] = get_default_vae_logger,
         eval_every=-1,
+        weighted_replay: bool = False,
         **base_kwargs
     ):
         """
@@ -678,6 +682,10 @@ class VAETraining(SupervisedTemplate):
             only at the end of the learning experience. Values >0 mean that
             `eval` is called every `eval_every` epochs and at the end of the
             learning experience.
+
+        :param weighted_replay: If True, the loss is computed as a weighted sum
+            of the data loss and the replay loss with changing ratio. This
+            assumes replay_size to be None and increasing_replay_size to be False.
         :param **base_kwargs: any additional
             :class:`~avalanche.training.BaseTemplate` constructor arguments.
         """
@@ -697,8 +705,9 @@ class VAETraining(SupervisedTemplate):
         )
 
     def criterion(self):
-        """Weighted Loss function according to the importance of new task."""
-
+        """Weighted Loss function according to the importance of new task.
+        Return normal data loss if weighted_replay is not set.
+        """
         replay_idx = self.train_mb_size
         self.x_hat, self.mean, self.logvar = self.mb_output
         data_loss = self._criterion(
@@ -710,7 +719,7 @@ class VAETraining(SupervisedTemplate):
             ),
         )
 
-        if self.experience.current_experience == 0:
+        if not self.weighted_replay or self.experience.current_experience == 0:
             return data_loss
 
         replay_loss = self._criterion(

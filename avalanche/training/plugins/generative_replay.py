@@ -1,19 +1,3 @@
-################################################################################
-# Copyright (c) 2021 ContinualAI.                                              #
-# Copyrights licensed under the MIT License.                                   #
-# See the accompanying LICENSE file for terms.                                 #
-#                                                                              #
-# Date: 05-03-2022                                                             #
-# Author: Florian Mies                                                         #
-# Website: https://github.com/travela                                          #
-################################################################################
-
-"""
-
-All plugins related to Generative Replay.
-
-"""
-
 from copy import deepcopy
 from typing import Optional, Any
 from avalanche.core import SupervisedPlugin, Template
@@ -22,33 +6,19 @@ import torch
 
 class GenerativeReplayPlugin(SupervisedPlugin):
     """
-    Experience generative replay plugin.
-
+    Generative Replay (GR) plugin.
     Updates the current mbatch of a strategy before training an experience
     by sampling a generator model and concatenating the replay data to the
     current batch.
-
-    In this version of the plugin the number of replay samples is
-    increased with each new experience. Another way to implempent
-    the algorithm is by weighting the loss function and give more
-    importance to the replayed data as the number of experiences
-    increases. This will be implemented as an option for the user soon.
-
-    :param generator_strategy: In case the plugin is applied to a non-generative
-     model (e.g. a simple classifier), this should contain an Avalanche strategy
-     for a model that implements a 'generate' method
-     (see avalanche.models.generator.Generator). Defaults to None.
-    :param untrained_solver: if True we assume this is the beginning of
-        a continual learning task and add replay data only from the second
-        experience onwards, otherwise we sample and add generative replay data
-        before training the first experience. Default to True.
-    :param replay_size: The user can specify the batch size of replays that
-        should be added to each data batch. By default each data batch will be
-        matched with replays of the same number.
-    :param increasing_replay_size: If set to True, each experience this will
-        double the amount of replay data added to each data batch. The effect
-        will be that the older experiences will gradually increase in importance
-        to the final loss.
+    There are three ways to implement generative replay. The first is to
+    generate constant replay size data and append to each minibatch before
+    iteration. Another way is to increase the replay size where with each
+    iteration train_mb_size times current experience index will be added
+    to each minibatch before each iteration. The third way is by weighting
+    the loss function and give more importance to the replayed data as the
+    number of experiences increases. In this way train_mb_size samples are
+    generated and the loss is computed as a weighted sum of the data loss
+    and the replay loss with adaptive ratio.
     """
 
     def __init__(
@@ -59,7 +29,20 @@ class GenerativeReplayPlugin(SupervisedPlugin):
         increasing_replay_size: bool = False,
     ):
         """
-        Init.
+        :param generator_strategy: In case the plugin is applied to a non-generative
+            model (e.g. a simple classifier), this should contain an Avalanche strategy
+            for a model that implements a 'generate' method
+            (see avalanche.models.generator.Generator). Defaults to None.
+        :param untrained_solver: if True we assume this is the beginning of
+            a continual learning task and add replay data only from the second
+            experience onwards, otherwise we sample and add generative replay data
+            before training the first experience. Default to True.
+        :param replay_size: The user can specify the batch size of replays that
+            should be added to each data batch. By default each data batch will be
+            matched with replays of the same number.
+        :param increasing_replay_size: If True, in each iteration train_mb_size
+            times current experience index will be added to each minibatch
+            before each iteration.
         """
         super().__init__()
         self.generator_strategy = generator_strategy
@@ -128,20 +111,22 @@ class GenerativeReplayPlugin(SupervisedPlugin):
 
         replay_size = self.calculate_replay_size(strategy)
 
-        # extend X with replay data
+        # extend inputs
         replay = self.old_generator.generate(replay_size).to(strategy.device)
         strategy.mbatch[0] = torch.cat([strategy.mbatch[0], replay], dim=0)
-        # extend y with predicted labels (or mock labels if model==generator)
+
+        # extend labels
         if not self.model_is_generator:
             with torch.no_grad():
                 replay_output = self.old_model(replay).argmax(dim=-1)
         else:
-            # Mock labels:
             replay_output = torch.zeros(replay.shape[0])
+
         strategy.mbatch[1] = torch.cat(
             [strategy.mbatch[1], replay_output.to(strategy.device)], dim=0
         )
-        # extend task id batch (we implicitley assume a task-free case)
+
+        # extend task ids(we implicitley assume a task-free case)
         strategy.mbatch[-1] = torch.cat(
             [
                 strategy.mbatch[-1],
